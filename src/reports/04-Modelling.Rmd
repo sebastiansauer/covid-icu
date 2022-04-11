@@ -2,6 +2,8 @@
 title: "03 Modeling"
 date: "`r Sys.time()`"
 author: Sebastian Sauer
+params:
+  dataset: small
 output: 
   html_document:
     number_sections: TRUE
