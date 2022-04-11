@@ -1,0 +1,279 @@
+---
+title: "01 Preparing the data"
+date: "`r Sys.time()`"
+author: Sebastian Sauer
+params:
+  dataset: small
+output: 
+  html_document:
+    toc: TRUE
+    number_sections: TRUE
+---
+
+
+# Setup
+
+
+```{r global-knitr-options, include=FALSE}
+
+knitr::opts_chunk$set(
+  fig.pos = 'H',
+  fig.asp = 0.618,
+  fig.align='center',
+  fig.width = 5,
+  out.width = "100%",
+  fig.cap = "", 
+  fig.path = "chunk-img/",
+  dpi = 300,
+  # tidy = TRUE,
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  cache = FALSE,
+  fig.show = "hold")
+
+#knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+
+
+
+```{r}
+library("tidyverse")
+library("here")  # paths made easy
+library("assertthat")  # testing
+library("VIM")  # missing values
+library("janitor")  # data cleansing
+library("futile.logger")  # logging
+library("labelled")  #  excluding nagging attributes of columns
+library("visdat")  # csv fingerprint
+library("gt")  # html tables
+```
+
+
+```{r}
+source(here("src", "01-constants.R"))
+source(here("src", "funs", "prepare-data.R"))
+source(here("src", "funs", "helper-funs.R"))
+source(here("src", "funs", "prop_NA.R"))
+```
+
+
+# Init logger
+
+```{r}
+flog.appender(appender.file("covid-icu.log"))
+flog.threshold(INFO)
+flog.info("STARTING script 01")
+flog.info("Logger inited")
+```
+
+
+
+# Prepare data
+
+
+## Choose data set
+
+```{r choose-data-set}
+if (params$dataset == "small") {
+  data_raw_path <- here::here(data_raw_small_path)
+  stopifnot(file.exists(data_raw_path))
+}
+```
+
+
+**Dataset used: `r params$dataset`**
+
+## Import and prepare data
+
+```{r prepare-data, results = "hide", message = FALSE, warning = FALSE}
+d1 <- prepare_data(data_raw_path = data_raw_path, 
+                   dv = "verlauf",
+                   id = "fallnummer")
+flog.info("prepare_data was run")
+```
+
+
+Dimensions of the data set:
+
+```{r}
+dim(d1)
+```
+
+
+
+
+# d1 fingerprint
+
+
+```{r fingerprint-csv}
+vis_dat(d1)
+```
+
+
+
+
+>   Each cell is colored according to its type. Yellow for strings, blue for integers, purple for decimals and gray for empty values.
+
+
+# Remove ROWS with many missing
+
+Are there rows with many missings?
+
+
+```{r}
+d1 %>% 
+  rowwise() %>% 
+  mutate(isna_sum =  sum_isna(c_across(everything()))) %>% 
+  mutate(isna_prop = isna_sum / ncol(.))
+```
+
+
+
+```{r count-na-rowwise}
+na_rowwise <-
+  d1 %>% 
+  rowwise() %>% 
+  mutate(isna_sum =  sum_isna(c_across(everything()))) %>% 
+  mutate(isna_prop = isna_sum / ncol(.)) %>% 
+  ungroup()
+```
+
+
+```{r}
+na_rowwise %>% 
+  select(id, isna_sum, isna_prop) %>% 
+  arrange(-isna_prop) %>% 
+  filter(isna_prop > .3)
+```
+
+
+
+
+
+# Missing data analysis
+
+
+```{r}
+VIM::aggr(d1)
+```
+
+
+```{r comp-na}
+d1_sumisna <- 
+  d1 %>% 
+  summarise(across(everything(), sum_isna)) %>% 
+  pivot_longer(everything()) %>% 
+  mutate(prop = value/nrow(d1)) %>% 
+  arrange(-prop) %>% 
+  filter(prop > .1)
+
+flog.info("Vars with more than 10% NA to be excluded")
+```
+
+
+# Remove variables with more than 10% missings
+
+Which variables have more than 10% missing values?
+
+```{r show-prop-na}
+prop_NA(d1) %>% 
+  gt() %>% 
+  fmt_number(3)
+```
+
+
+What are the names of those variables (With many missings)?
+
+```{r show-cols-many-missings}
+vars_many_missings <- 
+  d1 %>% 
+  prop_NA %>% 
+  pull(name)
+
+vars_many_missings
+```
+
+
+
+# d2: data without vars with many missings
+
+
+```{r rm-cols-with-many-missings}
+d2 <-
+  d1 %>% 
+  select(-all_of(vars_many_missings))
+
+flog.info("Remove vars with many missings (>10%)")
+```
+
+
+
+
+# Recode dependent variable
+
+```{r recode-dv}
+d2 <- 
+  d2 %>% 
+  mutate(verlauf = as.factor(verlauf)) %>% 
+  mutate(verlauf = case_when(
+    verlauf == 1 ~ "good",
+    verlauf == 2 ~ "bad"
+  )) 
+
+flog.info("Recoded DV to 'good', 'bad'")
+```
+
+```{r}
+dim(d2)
+```
+
+
+# Exclude (near) zero variance (nzv) variables
+
+
+```{r find-nzv}
+nzv_vars <- caret::nearZeroVar(d2, names = TRUE)
+nzv_vars
+```
+
+```{r rm-nzv-vars}
+d3 <-
+  d2 %>% 
+  select(-all_of(nzv_vars))
+
+flog.info("Removed near zero variance variables")
+```
+
+
+# Excluding attributes
+
+
+```{r remove-attirbues}
+d3 <- labelled::remove_attributes(d3, "spec")
+
+flog.info("Removing attributes 'spec' from df")
+```
+
+
+# Remaining columns in data set
+
+```{r}
+names(d3)
+```
+
+
+
+
+# Writing to disk
+
+```{r write-to-disk}
+if (params$dataset == "small") {
+  write_csv(d3, file = here("data", "processed", "data-small-prepared.csv"))
+} else {
+  write_csv(d3, file = paste0(data_processed_path, "data-prepared.csv"))
+}
+flog.info("Written 'data-cleaned.csv' to disk.")
+```
+

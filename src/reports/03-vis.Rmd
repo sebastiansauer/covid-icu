@@ -1,0 +1,177 @@
+---
+title: "02 Visualizing main results"
+date: "`r Sys.time()`"
+author: Sebastian Sauer
+params:
+  dataset: small
+output: 
+  html_document:
+    number_sections: TRUE
+    toc: TRUE
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup
+
+
+```{r global-knitr-options, include=FALSE}
+
+knitr::opts_chunk$set(
+  fig.pos = 'H',
+  fig.asp = 0.618,
+  fig.align='center',
+  fig.width = 5,
+  out.width = "100%",
+  fig.cap = "", 
+  fig.path = "chunk-img/",
+  dpi = 300,
+  # tidy = TRUE,
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  cache = FALSE,
+  fig.show = "asis")
+
+#knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+
+
+```{r load-libs}
+library("tidyverse")
+library("here")
+library("assertthat")
+library("VIM")
+library("janitor")
+library("ggstatsplot")
+library("glue")
+library("gt")
+library("rstatix")
+library("broom")
+library("futile.logger")
+library("gt")
+library("infer")
+
+conflicted::conflict_prefer("discard", "purrr")
+conflicted::conflict_prefer("filter", "dplyr")
+```
+
+
+
+
+
+```{r init-logging, results="hide"}
+flog.appender(appender.file("covid-icu.log"))
+flog.threshold(INFO)
+flog.info("STARTING script 02")
+flog.info("Logger inited")
+```
+
+
+```{r source-funs}
+source(here("src", "01-constants.R"))
+source(here("src", "funs", "prepare-data.R"))
+source(here("src", "funs", "helper-funs.R"))
+source(here("src", "funs", "prop_NA.R"))
+source(here("src", "funs", "compare_progression.R"))
+source(here("src", "funs", "is_binary.R"))
+```
+
+
+
+# Import data
+
+
+```{r import-data-prepared}
+if (params$dataset == "small") {
+  d <- read_csv(here("data", "processed", "data-small-prepared.csv"))
+} else {
+  d <- read_csv(here("data", "processed", "data-prepared.csv"))
+}
+```
+
+**Dataset used: `r params$dataset`**
+
+# Compare progression for metric variables
+
+
+```{r find-binary-metric-vars}
+names_binary_vars <- 
+d %>% 
+  keep(is_binary, na.rm = TRUE) %>% 
+  names()
+
+names_binary_vars
+
+names_metric_vars <-
+  d %>% 
+  keep(negate(~ is_binary(., na.rm = TRUE))) %>% 
+  names()
+
+names_metric_vars
+```
+
+
+## Comparing metric variables with regard to progress (bad/good) 
+
+List of metric variables to be compared with regard to progress (bad/good):
+
+```{r}
+cols_to_be_compared_metric <-
+  names_metric_vars %>% 
+  discard(~ .x %in% c("fallnummer", "verlauf", "id"))
+
+cols_to_be_compared_metric
+```
+
+
+
+```{r compare-progression-list, fig.width=5, results = "asis"}
+cols_to_be_compared_metric %>% 
+  map(~ compare_progression_metric(d, 
+                                   group = verlauf, 
+                                   var = .))
+```
+
+
+
+# Comparing nominal variables with regard to p rogress (bad/good) 
+
+```{r}
+cols_to_be_compared_binary <-
+  names_binary_vars %>% 
+  discard(~ .x %in% c("fallnr", "verlauf"))
+```
+
+
+```{r}
+d_factor <-
+  d %>%
+  select(verlauf, all_of(cols_to_be_compared_binary)) %>%
+  mutate(across(everything(),
+                factor))
+```
+
+
+
+## Vis (pie charts)
+
+```{r pie-charts}
+ggpiestats(data = d, x = verlauf, y = ns_hf, bf.message = FALSE, title = "ns_hf")
+ggpiestats(data = d, x = verlauf, y = niv, bf.message = FALSE, title = "niv")
+ggpiestats(data = d, x = verlauf, y = resp_insuff, bf.message = FALSE, title = "resp_insuff")
+ggpiestats(data = d, x = verlauf, y = beatmung_imv, bf.message = FALSE, title = "beatmung_imv")
+ggpiestats(data = d, x = verlauf, y = pneumonie_bakterielle_virale_fungale_superinfektion, bf.message = FALSE, title = "pneumonie_bakterielle_virale_fungale_superinfektion")
+ggpiestats(data = d, x = verlauf, y = sepsis, bf.message = FALSE, title = "sepsis")
+ggpiestats(data = d, x = verlauf, y = kardiale_beteiligung_tara_vhf_mi, bf.message = FALSE, title = "kardiale_beteiligung_tara_vhf_mi")
+ggpiestats(data = d, x = verlauf, y = tod, bf.message = FALSE, title = "tod")
+ggpiestats(data = d, x = verlauf, y = dyspnoe, bf.message = FALSE, title = "dyspnoe")
+ggpiestats(data = d, x = verlauf, y = nikotinabusus, bf.message = FALSE, title = "nikotinabusus")
+ggpiestats(data = d, x = verlauf, y = art_hypert, bf.message = FALSE, title = "art_hypert")
+ggpiestats(data = d, x = verlauf, y = dm, bf.message = FALSE, title = "dm")
+ggpiestats(data = d, x = verlauf, y = geschlecht, bf.message = FALSE, title = "geschlecht")
+ggpiestats(data = d, x = verlauf, y = kopfschm, bf.message = FALSE, title = "kopfschm")
+ggpiestats(data = d, x = verlauf, y = adipositas, bf.message = FALSE, title = "adipositas")
+```
+

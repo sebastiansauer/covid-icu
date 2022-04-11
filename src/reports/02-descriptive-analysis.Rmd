@@ -1,0 +1,341 @@
+---
+title: "02 descriptive analysis"
+date: "`r Sys.time()`"
+author: Sebastian Sauer
+params:
+  dataset: small
+output: 
+  html_document:
+    number_sections: TRUE
+    toc: TRUE
+editor_options: 
+  chunk_output_type: console
+---
+
+# Setup
+
+
+```{r global-knitr-options, include=FALSE}
+
+knitr::opts_chunk$set(
+  fig.pos = 'H',
+  fig.asp = 0.618,
+  fig.align='center',
+  fig.width = 5,
+  out.width = "100%",
+  fig.cap = "", 
+  fig.path = "chunk-img/",
+  dpi = 300,
+  # tidy = TRUE,
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  cache = FALSE,
+  fig.show = "asis")
+
+#knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+
+
+```{r load-libs}
+library("tidyverse")
+library("here")
+library("assertthat")
+library("VIM")
+library("janitor")
+library("ggstatsplot")
+library("glue")
+library("gt")
+library("rstatix")
+library("broom")
+library("futile.logger")
+library("gt")
+library("infer")
+library("effectsize")
+
+conflicted::conflict_prefer("cohens_d", "effectsize")
+conflicted::conflict_prefer("discard", "purrr")
+conflicted::conflict_prefer("filter", "dplyr")
+```
+
+
+
+
+
+```{r init-logging, results="hide"}
+flog.appender(appender.file("covid-icu.log"))
+flog.threshold(INFO)
+flog.info("STARTING script 02")
+flog.info("Logger inited")
+```
+
+
+```{r source-funs}
+source(here("src", "01-constants.R"))
+source(here("src", "funs", "prepare-data.R"))
+source(here("src", "funs", "helper-funs.R"))
+source(here("src", "funs", "prop_NA.R"))
+source(here("src", "funs", "compare_progression.R"))
+source(here("src", "funs", "is_binary.R"))
+```
+
+
+
+# Import data
+
+
+```{r import-data-prepared}
+if (params$dataset == "small") {
+  d <- read_csv(here("data", "processed", "data-small-prepared.csv"))
+} else {
+  d <- read_csv(here("data", "processed", "data-prepared.csv"))
+}
+```
+
+**Dataset used: `r params$dataset`**
+
+
+# Exclude "forbidden" columns
+
+
+These are the "forbidden" variables:
+
+```{r}
+forbidden_vars
+```
+
+There are `r length(forbidden_vars)` "forbidden" variables.
+
+These variables will be excluded from further analyses.
+
+```{r}
+d <-
+  d %>% 
+  select(-all_of(forbidden_vars))
+```
+
+
+# Compare progression for metric variables
+
+"Forbidden" variables are exlcuded from this and the subsequent analyses.
+
+
+```{r find-binary-metric-vars}
+names_binary_vars <- 
+d %>% 
+  keep(is_binary, na.rm = TRUE) %>% 
+  names()
+
+names_binary_vars
+
+names_metric_vars <-
+  d %>% 
+  keep(negate(~ is_binary(., na.rm = TRUE))) %>% 
+  names()
+
+names_metric_vars
+```
+
+
+## t-Tests sorted by p-value
+
+
+
+
+
+Name of metric variables (defines as having more than 2 outcome values):
+
+`r names_metric_vars`.
+
+
+The following table shows the results of t-Tests,
+where `verlauf` served as independent variable in each case. 
+The dependent variable is one of the metric variables, each in turn.
+
+```{r}
+ttest_res <- 
+d %>% 
+  select(all_of(names_metric_vars), -verlauf) %>% 
+  map( ~t.test(.x ~ verlauf, data = d), .id = "var") %>% 
+  map_df(tidy) %>% 
+  mutate(var = names_metric_vars) %>% 
+  mutate(is_signif = p.value < .05) %>% 
+  arrange(p.value) 
+```
+
+
+```{r}
+ttest_res %>% 
+  select(var, estimate, statistic, p.value, is_signif) %>% 
+  arrange(-statistic) %>% 
+  gt() %>% 
+  fmt_number(c(2,3)) %>% 
+  fmt_scientific(4)
+```
+
+
+  
+  
+
+The sample sizes look quite small though?!
+
+### Check sample size
+
+What's the sample size, counting only complete cases for one particular t-test?
+
+```{r}
+d %>% 
+  select(id, sat_percent, verlauf) %>% 
+  drop_na() %>% 
+  nrow()
+```
+
+Let's run the t-test manually:
+
+```{r}
+d %>% 
+  select(id, sat_percent, verlauf) %>% 
+  drop_na() %>% 
+  t.test(sat_percent ~ verlauf, data = .)
+```
+
+The `df` is so small, can that be correct?
+
+Normally, the df is computed by summing the sample sizes of the two groups (minus 2):
+
+$df = n_1 + n_2 - 2$, 
+
+which gives us the complete sample size (minus 2).
+
+Here's a simple test with a well-behaved data set, for testing purposes:
+
+```{r}
+t.test(mpg ~ am, data = mtcars)
+```
+
+Ah, now I know! The `df` of the Welch-Variant of the t-test is computed differently, yielding a smaller "effective" sample size!
+
+```{r}
+t.test(mpg ~ am, data = mtcars, var.equal = TRUE)
+```
+
+
+So, our above computations should be ok!
+
+## Effect size 
+
+
+
+
+```{r}
+cohensd_res <- 
+d %>% 
+  select(all_of(names_metric_vars), -verlauf) %>% 
+  map_df( ~ cohens_d(.x ~ verlauf, data = d), .id = "var") %>% 
+  arrange(-abs(Cohens_d)) %>% 
+  mutate(cles_pr_sup = d_to_cles(Cohens_d)[[1]])
+```
+
+
+```{r}
+cohensd_res %>% 
+  gt() %>% 
+  fmt_number(where(is.numeric))
+```
+
+
+
+
+# Comparing nominal variables with regard to progress (bad/good) 
+
+```{r}
+cols_to_be_compared_binary <-
+  names_binary_vars %>% 
+  discard(~ .x %in% c(c("fallnr", "id"), forbidden_vars))
+```
+
+There are `r length(cols_to_be_compared_binary)` binary variables to be compared.
+
+
+```{r}
+d_factor <-
+  d %>%
+  select(verlauf, all_of(cols_to_be_compared_binary)) %>%
+  mutate(across(everything(),
+                factor))
+
+dim(d_factor)
+```
+
+
+
+
+## Chi-Square tests
+
+
+```{r chi-sq-tests}
+chisq_res <- 
+  d_factor %>% 
+  map2_df(.y = cols_to_be_compared_binary,
+       ~ my_chisq3(d = d_factor, x = "verlauf", y = .y),
+       .id = "var")  %>% 
+  mutate(is_signif = p.value < .05) %>% 
+  arrange(p.value) %>% 
+  select(-c(method, parameter)) %>% 
+  mutate(phi = chisq_to_phi(
+    chisq = statistic,
+    n = chi_count,
+    nrow =chi_nrow,
+    ncol = chi_ncol)[[1]],
+    cramersv = chisq_to_cramers_v(
+      chisq = statistic,
+      n = chi_count,
+      nrow =chi_nrow,
+      ncol = chi_ncol)[[1]])
+```
+
+
+```{r chi-sq-tests-print}
+chisq_res %>% 
+  select(var, statistic, p.value, is_signif, phi, cramersv) %>% 
+  gt() %>% 
+  fmt_number(where(is.numeric)) %>% 
+  fmt_scientific(p.value)
+```
+
+
+
+
+## Interpret effect sizes: Cramers V
+
+```{r add-es-interpret}
+chisq_res <- 
+chisq_res %>% 
+  mutate(cramersv_interpret = interpret_cramers_v(cramersv),
+         phi_interpret = interpret_phi(phi))
+```
+
+
+```{r show-es-interpret}
+chisq_res %>% 
+select(var, cramersv, cramersv_interpret,
+       phi, phi_interpret) %>% 
+  gt()%>% 
+  fmt_number(where(is.numeric))
+```
+
+
+## Significant variables only
+
+
+```{r}
+chisq_res %>% 
+  filter(is_signif == TRUE) %>% 
+  filter(var != "verlauf") %>% 
+   select(var, statistic, p.value, is_signif, phi, cramersv, phi_interpret) %>% 
+  gt() %>% 
+  fmt_number(where(is.numeric)) %>% 
+  fmt_scientific(p.value)
+```
+

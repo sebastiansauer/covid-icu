@@ -1,0 +1,463 @@
+---
+title: "03 Modeling"
+date: "`r Sys.time()`"
+author: Sebastian Sauer
+output: 
+  html_document:
+    number_sections: TRUE
+    toc: TRUE
+editor_options: 
+  chunk_output_type: console
+---
+
+
+# Setup
+
+
+```{r global-knitr-options, include=FALSE}
+
+knitr::opts_chunk$set(
+  fig.pos = 'H',
+  fig.asp = 0.618,
+  fig.align='center',
+  fig.width = 5,
+  out.width = "100%",
+  fig.cap = "", 
+  fig.path = "chunk-img/",
+  dpi = 300,
+  # tidy = TRUE,
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  cache = FALSE,
+  fig.show = "hold")
+
+#knitr::opts_knit$set(root.dir = normalizePath(".."))
+```
+
+
+
+
+```{r}
+library("tidyverse")
+library("here")
+library("assertthat")
+library("tidymodels")
+library("xgboost")
+library("tictoc")
+library("gt")
+library("vip")
+
+tidymodels_prefer() 
+conflicted::conflict_prefer("spec", "yardstick")
+conflicted::conflict_prefer("discard", "purrr")
+
+source(here("src", "01-constants.R"))
+
+cores <- parallel::detectCores()
+```
+
+
+
+
+# Train and Test
+
+Load data.
+
+
+```{r import-data-prepared}
+if (params$dataset == "small") {
+  d <- read_csv(here("data", "processed", "data-small-prepared.csv"))
+} else {
+  d <- read_csv(here("data", "processed", "data-prepared.csv"))
+}
+```
+
+**Dataset used: `r params$dataset`**
+
+Define DV as factor, since we are modelling a *classification setting*:
+
+```{r}
+d <-
+  d %>% 
+  mutate(verlauf = factor(verlauf))
+```
+
+
+
+## Check
+
+### NA per column/variable
+
+List of columns with missing values
+
+```{r}
+d %>% 
+  map_dfr( ~ sum(is.na(.))) %>% 
+  pivot_longer(everything()) %>% 
+  arrange(-value) %>% 
+  filter(value > 0) %>% 
+  gt()
+```
+
+
+Number of observations when all NAs are removed:
+
+```{r}
+d %>% 
+  drop_na() %>% 
+  nrow()
+```
+
+
+
+## Splitting
+
+    
+```{r}
+set.seed(42)
+d_split <- initial_split(d, prop = .8, strata = verlauf)
+d_split
+```
+
+
+
+```{r}
+d_train <- training(d_split)
+d_test <- training(d_split)
+```
+
+
+
+# Define workflow
+
+
+## Models
+
+
+### XGB
+
+```{r}
+xgb_mod <- 
+  boost_tree(
+  trees = 1000, 
+  tree_depth = tune(), 
+  min_n = tune(), 
+  loss_reduction = tune(),  ## first three: model complexity
+  sample_size = tune(), mtry = tune(), ## randomness
+  learn_rate = tune(),  ## step size
+) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification")
+```
+
+
+### RF
+
+```{r}
+rf_mod <- 
+  rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
+  set_engine("ranger", 
+             num.threads = cores, 
+             importance = "permutation") %>% 
+  set_mode("classification")
+```
+
+
+## CV
+
+```{r}
+folds_spec <-
+  vfold_cv(d_train)
+```
+
+
+
+## Recipe
+
+```{r}
+basic_recipe <-
+  recipe(verlauf ~ ., data = d_train) %>% 
+  update_role(fallnr, new_role = "ID") %>% 
+  update_role(tod, new_role = "ID") %>% 
+  step_zv(all_numeric(), -all_outcomes()) %>% 
+  step_normalize(all_numeric(), -all_outcomes()) %>% 
+  step_corr(all_predictors(), threshold = 0.7, method = "spearman") %>% 
+  step_impute_knn(all_predictors())
+```
+
+
+## Workflows
+
+
+```{r}
+xgb_wf <-
+  workflow() %>% 
+  add_model(xgb_mod) %>% 
+  add_recipe(basic_recipe)
+```
+
+
+
+```{r}
+rf_wf <-
+  workflow() %>% 
+  add_model(rf_mod) %>% 
+  add_recipe(basic_recipe)
+
+rf_wf
+```
+
+
+## Define performance metrics
+
+
+```{r}
+class_metrics <- 
+  metric_set(
+      recall, 
+      precision, 
+      f_meas, 
+      accuracy, 
+      kap,
+      roc_auc, 
+      sens, 
+      spec,
+      ppv
+  )
+    ```
+
+
+
+## Fit resamples/tune
+
+### XGB 
+
+
+```{r}
+xgb_grid <- 
+  grid_latin_hypercube(
+    tree_depth(),
+    min_n(),
+    loss_reduction(),
+    sample_size = sample_prop(),
+    finalize(mtry(), d_train),
+    learn_rate(),
+    size = 30
+  )
+```
+
+
+```{r grid-xgb}
+doParallel::registerDoParallel()
+
+if (rerun_all == TRUE){
+  tic()
+  cat("Computing XGB with tuning grid\n")
+  xgb_res <-
+    xgb_wf %>% 
+    tune_grid(
+      xgb_wf,
+      resamples = folds_spec,
+      metrics = metric_set(
+        recall, 
+        precision, 
+        f_meas, 
+        accuracy, 
+        kap,
+        roc_auc, 
+        sens, 
+        spec,
+        ppv
+  ),
+      grid = xgb_grid,
+      control = control_grid(save_pred = TRUE)
+    )
+  toc()
+  write_rds(xgb_res, file = "models/xgb.rds")
+} else xgb_res <- read_rds(file = "models/xgb.rds")
+
+xgb_res %>% 
+  collect_metrics(summarize = TRUE) %>% 
+  gt()
+```
+
+
+```{r}
+#write_rds(xgb_res, file = "models/xgb.rds")
+#xgb_res <- read_rds(file = "models/xgb.rds")
+```
+
+
+### RF
+
+
+
+```{r}
+rf_mod
+
+```
+
+```{r grid-rf}
+if (rerun_all == TRUE){
+  tic()
+  cat("Computing RF with tuning grid\n")
+  rf_res <-
+    rf_wf %>% 
+    tune_grid(
+      resamples = folds_spec,
+      grid = 25,
+      control = control_grid(save_pred = TRUE),
+      metrics = metric_set(
+        recall, 
+        precision, 
+        f_meas, 
+        accuracy, 
+        kap,
+        roc_auc, 
+        sens, 
+        spec,
+        ppv
+  ))
+  toc()
+  write_rds(rf_res, file = "models/rf.rds")
+} else rf_res <- read_rds(file = "models/rf.rds")
+
+rf_res %>% 
+  collect_metrics(summarize = TRUE) %>% 
+  gt()
+```
+
+
+```{r}
+#write_rds(rf_res, file = "models/rf.rds")
+# rf_res <- read_rds(file = "models/rf.rds")
+```
+
+
+
+# Results
+
+
+## XGB
+
+
+```{r}
+autoplot(xgb_res)
+```
+
+
+```{r}
+show_best(xgb_res)
+```
+
+
+
+## RF
+
+
+```{r}
+autoplot(rf_res)
+```
+
+
+# Best tuning parameters
+
+```{r}
+show_best(rf_res, metric = "recall")
+select_best(rf_res, metric = "recall")
+
+rf_best_params <-
+  tibble(
+    mtry = select_best(rf_res, metric = "recall")$mtry[1],
+    min_n = select_best(rf_res, metric = "recall")$min_n[1]
+  )
+```
+
+
+## RF
+
+### Finalize workflow
+
+```{r}
+fin_rf_wf <-
+  rf_wf %>% 
+  finalize_workflow(rf_best_params)
+fin_rf_wf
+```
+
+
+
+### Final fit
+
+```{r}
+final_rf_fit <-
+  fin_rf_wf %>% 
+  last_fit(d_split,
+           metrics = metric_set(
+             recall, 
+             precision, 
+             f_meas, 
+             accuracy, 
+             kap,
+             roc_auc, 
+             sens, 
+             spec,
+             ppv)
+  )
+
+final_rf_fit
+```
+
+```{r}
+if (write_to_disk == TRUE) 
+  write_rds(final_rf_fit, 
+            file = "models/final_rf_fit.rds")
+```
+
+
+
+### Get performance metrics
+
+
+
+
+
+```{r}
+final_fit_metrics_rf <- 
+  final_rf_fit %>% 
+  collect_metrics()
+
+final_fit_metrics_rf
+```
+
+
+```{r}
+final_fit_metrics_rf %>% 
+  select(-.config) %>% 
+  gt()
+```
+
+
+
+```{r}
+final_rf_fit %>% 
+  pluck(".workflow", 1) %>% 
+  extract_fit_parsnip() %>% 
+  vip(num_features = 20)
+```
+
+
+
+
+# Baseline model
+
+
+```{r}
+d %>% 
+  count(verlauf) %>% 
+  mutate(prop = n/sum(n)) %>% 
+  gt() %>% 
+  fmt_number(3)
+```
+
