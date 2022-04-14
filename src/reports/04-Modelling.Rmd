@@ -1,9 +1,9 @@
 ---
-title: "03 Modeling"
+title: "04 Modeling"
 date: "`r Sys.time()`"
 author: Sebastian Sauer
 params:
-  dataset: small
+  dataset: dataset
 output: 
   html_document:
     number_sections: TRUE
@@ -31,7 +31,7 @@ knitr::opts_chunk$set(
   echo = TRUE,
   message = FALSE,
   warning = FALSE,
-  cache = FALSE,
+  cache = TRUE,
   fig.show = "hold")
 
 #knitr::opts_knit$set(root.dir = normalizePath(".."))
@@ -39,8 +39,7 @@ knitr::opts_chunk$set(
 
 
 
-
-```{r}
+```{r load-libs}
 library("tidyverse")
 library("here")
 library("assertthat")
@@ -49,7 +48,12 @@ library("xgboost")
 library("tictoc")
 library("gt")
 library("vip")
+library("futile.logger")
+```
 
+
+
+```{r general-setup}
 tidymodels_prefer() 
 conflicted::conflict_prefer("spec", "yardstick")
 conflicted::conflict_prefer("discard", "purrr")
@@ -57,25 +61,50 @@ conflicted::conflict_prefer("discard", "purrr")
 source(here("src", "01-constants.R"))
 
 cores <- parallel::detectCores()
+doParallel::registerDoParallel()
 ```
 
 
 
+# Init logger
+
+```{r init-logger, echo = FALSE}
+flog.appender(appender.file("covid-icu.log"))
+flog.threshold(INFO)
+flog.info("STARTING script 04: Modelling")
+flog.info("Logger inited")
+```
 
 # Train and Test
 
-Load data.
 
 
-```{r import-data-prepared}
-if (params$dataset == "small") {
-  d <- read_csv(here("data", "processed", "data-small-prepared.csv"))
-} else {
-  d <- read_csv(here("data", "processed", "data-prepared.csv"))
-}
+
+
+**Dataset used: `r dataset`**
+
+**Dataset path:** `r data_processed_path`
+
+## Import data
+
+```{r prepare-data, results = "hide", message = FALSE, warning = FALSE}
+stopifnot(file.exists(data_processed_path))
+
+d <- read_csv(data_processed_path)
+flog.info("Processed data was read.")
+flog.info(paste0("Dimensions of data set read are: ", str_c(dim(d), collapse = ", ")))
+flog.info(paste0("Data path: ", data_processed_path))
 ```
 
-**Dataset used: `r params$dataset`**
+
+Dimensions of the data set:
+
+```{r}
+dim(d)
+```
+
+
+## DV as factor
 
 Define DV as factor, since we are modelling a *classification setting*:
 
@@ -103,7 +132,7 @@ d %>%
 ```
 
 
-Number of observations when all NAs are removed:
+Number of observations when all NAs (in all columns) are removed:
 
 ```{r}
 d %>% 
@@ -136,10 +165,24 @@ d_test <- training(d_split)
 
 ## Models
 
+### Majority model
+
+```{r}
+d_train %>% 
+  count(verlauf) %>% 
+  mutate(verlauf_prop = n/sum(n)) %>% 
+  gt() %>% 
+  fmt_number(where(is.numeric))
+```
+
+Hence, the **Recall** performance measure in this model is
+the larger value of the proportion.
+
+
 
 ### XGB
 
-```{r}
+```{r xgb-mod}
 xgb_mod <- 
   boost_tree(
   trees = 1000, 
@@ -156,9 +199,11 @@ xgb_mod <-
 
 ### RF
 
-```{r}
+```{r rf-mod}
 rf_mod <- 
-  rand_forest(mtry = tune(), min_n = tune(), trees = 1000) %>% 
+  rand_forest(mtry = tune(), 
+              min_n = tune(), 
+              trees = 1000) %>% 
   set_engine("ranger", 
              num.threads = cores, 
              importance = "permutation") %>% 
@@ -166,11 +211,22 @@ rf_mod <-
 ```
 
 
+
+### Logistic regression
+
+```{r glm-mod}
+logistic_mod <-
+  logistic_reg()  # engine is set by default
+```
+
+
 ## CV
+
+10 folds, 3 repeats.
 
 ```{r}
 folds_spec <-
-  vfold_cv(d_train)
+  vfold_cv(d_train, repeats  = 3)
 ```
 
 
@@ -180,8 +236,8 @@ folds_spec <-
 ```{r}
 basic_recipe <-
   recipe(verlauf ~ ., data = d_train) %>% 
-  update_role(fallnr, new_role = "ID") %>% 
-  update_role(tod, new_role = "ID") %>% 
+  update_role(id, new_role = "ID") %>% 
+  update_role(all_of(forbidden_vars), new_role = "ID") %>% 
   step_zv(all_numeric(), -all_outcomes()) %>% 
   step_normalize(all_numeric(), -all_outcomes()) %>% 
   step_corr(all_predictors(), threshold = 0.7, method = "spearman") %>% 
@@ -192,7 +248,7 @@ basic_recipe <-
 ## Workflows
 
 
-```{r}
+```{r xgb-wf}
 xgb_wf <-
   workflow() %>% 
   add_model(xgb_mod) %>% 
@@ -201,7 +257,7 @@ xgb_wf <-
 
 
 
-```{r}
+```{r rf-wf}
 rf_wf <-
   workflow() %>% 
   add_model(rf_mod) %>% 
@@ -209,6 +265,16 @@ rf_wf <-
 
 rf_wf
 ```
+
+
+
+```{r}
+logistic_wf <-
+  workflow() %>% 
+  add_model(logistic_mod) %>% 
+  add_recipe(basic_recipe)
+```
+
 
 
 ## Define performance metrics
@@ -227,7 +293,7 @@ class_metrics <-
       spec,
       ppv
   )
-    ```
+```
 
 
 
@@ -253,7 +319,9 @@ xgb_grid <-
 ```{r grid-xgb}
 doParallel::registerDoParallel()
 
-if (rerun_all == TRUE){
+if (rerun_all == FALSE & file.exists(paste0(here::here(xgb01_outputfile)))){
+  xgb_res <- read_rds(file = xgb01_outputfile)
+} else {
   tic()
   cat("Computing XGB with tuning grid\n")
   xgb_res <-
@@ -276,20 +344,9 @@ if (rerun_all == TRUE){
       control = control_grid(save_pred = TRUE)
     )
   toc()
-  write_rds(xgb_res, file = "models/xgb.rds")
-} else xgb_res <- read_rds(file = "models/xgb.rds")
-
-xgb_res %>% 
-  collect_metrics(summarize = TRUE) %>% 
-  gt()
+  write_rds(xgb_res, file = xgb01_outputfile)
+} 
 ```
-
-
-```{r}
-#write_rds(xgb_res, file = "models/xgb.rds")
-#xgb_res <- read_rds(file = "models/xgb.rds")
-```
-
 
 ### RF
 
@@ -297,11 +354,14 @@ xgb_res %>%
 
 ```{r}
 rf_mod
-
 ```
 
 ```{r grid-rf}
-if (rerun_all == TRUE){
+if (rerun_all == FALSE & file.exists(paste0(here::here(rf01_outputfile)))){
+  flog.info("Reading RDS file for Random Forest 01 model.")
+  rf_res <- read_rds(file = rf01_outputfile)
+} else {
+  flog.info("Computing Random Forest 01 model.")
   tic()
   cat("Computing RF with tuning grid\n")
   rf_res <-
@@ -322,30 +382,61 @@ if (rerun_all == TRUE){
         ppv
   ))
   toc()
-  write_rds(rf_res, file = "models/rf.rds")
-} else rf_res <- read_rds(file = "models/rf.rds")
-
-rf_res %>% 
-  collect_metrics(summarize = TRUE) %>% 
-  gt()
+  write_rds(rf_res, file = rf01_outputfile)
+}
 ```
 
+### Logistic regression
 
-```{r}
-#write_rds(rf_res, file = "models/rf.rds")
-# rf_res <- read_rds(file = "models/rf.rds")
+```{r fit-logistic-regr}
+logistic_res <-
+  logistic_wf %>% 
+   fit_resamples(
+      resamples = folds_spec,
+      control = control_grid(save_pred = TRUE),
+      metrics = metric_set(
+        recall, 
+        precision, 
+        f_meas, 
+        accuracy, 
+        kap,
+        roc_auc, 
+        sens, 
+        spec,
+        ppv
+  ))
+
+write_rds(logistic_res, file = logistic01_outputfile)
 ```
 
 
 
 # Results
 
+First, let's check the performance in the resamples and
+see which model candidates performed best.
 
 ## XGB
 
 
+Let's have a look at the results:
+
+
 ```{r}
+xgb_res %>% 
+  collect_metrics(summarize = TRUE) %>% 
+  slice_head(n = 10) %>% 
+  gt() %>% 
+  fmt_number(where(is.numeric)) 
+```
+
+
+
+```{r out.height=10, fig.asp = 1}
 autoplot(xgb_res)
+
+if (write_to_disk) ggsave(filename = paste0(figs_prefix_path, "xgb_res_cv.pdf"), 
+       width = 10, height = 10)
 ```
 
 
@@ -359,11 +450,49 @@ show_best(xgb_res)
 
 
 ```{r}
-autoplot(rf_res)
+rf_res %>% 
+  collect_metrics(summarize = TRUE) %>% 
+  slice_head(n = 10) %>% 
+  gt() %>% 
+  fmt_number(where(is.numeric))
 ```
 
 
+```{r out.height=10, fig.asp = 1}
+autoplot(rf_res)
+
+if (write_to_disk) ggsave(filename = paste0(figs_prefix_path, "rf_res_cv.pdf"), 
+       width = 10, height = 10)
+```
+
+
+```{r}
+show_best(rf_res)
+```
+
+
+## Logistic Regression
+
+
+```{r}
+logistic_res %>% 
+  collect_metrics(summarize = TRUE) %>% 
+  gt() %>% 
+  fmt_number(where(is.numeric))
+```
+
+
+
+
+```{r}
+show_best(logistic_res)
+```
+
+
+
 # Best tuning parameters
+
+## RF
 
 ```{r}
 show_best(rf_res, metric = "recall")
@@ -377,7 +506,7 @@ rf_best_params <-
 ```
 
 
-## RF
+
 
 ### Finalize workflow
 
@@ -411,10 +540,19 @@ final_rf_fit <-
 final_rf_fit
 ```
 
+Check the notes:
+
+```{r}
+final_rf_fit %>% pluck(".notes", 1) %>% pull(3)
+```
+
+
+
+
 ```{r}
 if (write_to_disk == TRUE) 
   write_rds(final_rf_fit, 
-            file = "models/final_rf_fit.rds")
+            file = final_rf_fit_file)
 ```
 
 
@@ -452,7 +590,7 @@ final_rf_fit %>%
 
 
 
-# Baseline model
+# Baseline model for Recall
 
 
 ```{r}

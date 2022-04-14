@@ -61,7 +61,7 @@ source(here("src", "funs", "prop_NA.R"))
 
 # Init logger
 
-```{r}
+```{r init-logger}
 flog.appender(appender.file("covid-icu.log"))
 flog.threshold(INFO)
 flog.info("STARTING script 01")
@@ -73,17 +73,9 @@ flog.info("Logger inited")
 # Prepare data
 
 
-## Choose data set
-
-```{r choose-data-set}
-if (params$dataset == "small") {
-  data_raw_path <- here::here(data_raw_small_path)
-  stopifnot(file.exists(data_raw_path))
-}
-```
 
 
-**Dataset used: `r params$dataset`**
+**Dataset used: `r dataset`**
 
 ## Import and prepare data
 
@@ -269,11 +261,8 @@ names(d3)
 # Writing to disk
 
 ```{r write-to-disk}
-if (params$dataset == "small") {
-  write_csv(d3, file = here("data", "processed", "data-small-prepared.csv"))
-} else {
-  write_csv(d3, file = paste0(data_processed_path, "data-prepared.csv"))
-}
-flog.info("Written 'data-cleaned.csv' to disk.")
+write_csv(d3, file = data_processed_path)
+
+flog.info(paste0("Written 'data-cleaned.csv' to disk to this path: ", data_processed_path))
 ```
 

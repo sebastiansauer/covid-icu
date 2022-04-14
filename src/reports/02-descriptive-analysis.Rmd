@@ -3,7 +3,7 @@ title: "02 descriptive analysis"
 date: "`r Sys.time()`"
 author: Sebastian Sauer
 params:
-  dataset: small
+  dataset: "small"
 output: 
   html_document:
     number_sections: TRUE
@@ -63,10 +63,10 @@ conflicted::conflict_prefer("filter", "dplyr")
 
 
 
-```{r init-logging, results="hide"}
+```{r init-logging, results="hide", include=FALSE}
 flog.appender(appender.file("covid-icu.log"))
 flog.threshold(INFO)
-flog.info("STARTING script 02")
+flog.info("STARTING script 02: Descriptive Analysis")
 flog.info("Logger inited")
 ```
 
@@ -81,19 +81,30 @@ source(here("src", "funs", "is_binary.R"))
 ```
 
 
-
 # Import data
 
 
-```{r import-data-prepared}
-if (params$dataset == "small") {
-  d <- read_csv(here("data", "processed", "data-small-prepared.csv"))
-} else {
-  d <- read_csv(here("data", "processed", "data-prepared.csv"))
-}
-```
 
 **Dataset used: `r params$dataset`**
+
+## Import data
+
+```{r prepare-data, results = "hide", message = FALSE, warning = FALSE}
+stopifnot(file.exists(data_processed_path))
+
+d <- read_csv(data_processed_path)
+flog.info("Processed data was read.")
+flog.info(paste0("Dimensions of data set read are: ", str_c(dim(d), collapse = ", ")))
+```
+
+
+Dimensions of the data set:
+
+```{r}
+dim(d)
+```
+
+
 
 
 # Exclude "forbidden" columns
