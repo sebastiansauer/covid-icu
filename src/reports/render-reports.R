@@ -1,37 +1,42 @@
 library(rmarkdown)
 
+source(here("src", "01-constants.R"))
+
+
+render_report <- function(this_report, path = path_prefix_docs) {
+
+  this_report_w_path <- here::here("src", "reports", paste0(this_report, ".Rmd"))
+  stopifnot(file.exists(this_report_w_path))
+
+  output_path <- here::here("docs", paste0(this_report, ".html"))
+
+  render(input = this_report_w_path,
+         output_file = output_path)
+
+}
+
 
 # rmdfile 01 --------------------------------------------------------------
 
 
-
-rmdfile01_w_path <- here::here("src", "reports", paste0(rmdfile01, ".Rmd"))
-stopifnot(file.exists(rmdfile01_w_path))
-
-render(input = rmdfile01_w_path,
-       output_file = here::here("docs", paste0(rmdfile01, ".html")))
-
+debug(render_report)
+render_report(rmdfile01)
 
 
 # rmdfile 02 --------------------------------------------------------------
 
 
-rmdfile02_w_path <- here::here("src", "reports", paste0(rmdfile02, ".Rmd"))
-stopifnot(file.exists(rmdfile02_w_path))
 
-render(input = rmdfile02_w_path,
-       output_file = here::here("docs", paste0(rmdfile02, ".html")))
-
+render_report(rmdfile02)
 
 
 # rmdfile 03 --------------------------------------------------------------
 
 
-rmdfile03_w_path <- here::here("src", "reports", paste0(rmdfile03, ".Rmd"))
-stopifnot(file.exists(rmdfile03_w_path))
 
-render(input = rmdfile03_w_path,
-       output_file = here::here("docs", paste0(rmdfile03, ".html")))
+render_report(rmdfile03)
 
+# rmdfile 04 --------------------------------------------------------------
 
 
+render_report(rmdfile04)

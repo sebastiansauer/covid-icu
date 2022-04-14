@@ -31,10 +31,8 @@ knitr::opts_chunk$set(
   echo = TRUE,
   message = FALSE,
   warning = FALSE,
-  cache = TRUE,
+  cache = FALSE,
   fig.show = "hold")
-
-#knitr::opts_knit$set(root.dir = normalizePath(".."))
 ```
 
 
@@ -175,7 +173,7 @@ d_train %>%
   fmt_number(where(is.numeric))
 ```
 
-Hence, the **Recall** performance measure in this model is
+Hence, the **Accuracy** performance measure in this model is
 the larger value of the proportion.
 
 
@@ -319,7 +317,7 @@ xgb_grid <-
 ```{r grid-xgb}
 doParallel::registerDoParallel()
 
-if (rerun_all == FALSE & file.exists(paste0(here::here(xgb01_outputfile)))){
+if (rerun_all == FALSE & file.exists(xgb01_outputfile)){
   xgb_res <- read_rds(file = xgb01_outputfile)
 } else {
   tic()
@@ -357,7 +355,7 @@ rf_mod
 ```
 
 ```{r grid-rf}
-if (rerun_all == FALSE & file.exists(paste0(here::here(rf01_outputfile)))){
+if (rerun_all == FALSE & file.exists(rf01_outputfile)){
   flog.info("Reading RDS file for Random Forest 01 model.")
   rf_res <- read_rds(file = rf01_outputfile)
 } else {
@@ -575,7 +573,8 @@ final_fit_metrics_rf
 ```{r}
 final_fit_metrics_rf %>% 
   select(-.config) %>% 
-  gt()
+  gt() %>% 
+  fmt_number(where(is.numeric))
 ```
 
 
@@ -590,7 +589,7 @@ final_rf_fit %>%
 
 
 
-# Baseline model for Recall
+# Baseline model for Accuracy
 
 
 ```{r}

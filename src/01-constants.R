@@ -3,11 +3,11 @@
 
 
 
-#dataset <- "small"
-dataset <- "real"
+dataset <- "small"
+#dataset <- "real"
 
 rerun_all <- FALSE
-write_to_disk <- TRUE
+write_to_disk <- FALSE
 
 
 
@@ -15,15 +15,17 @@ write_to_disk <- TRUE
 # Data Paths -------------------------------------------------------------------
 
 
-path_prefix_real <- "/Users/sebastiansaueruser/Google Drive/research/Covid19/covid-icu-old/"
-path_prefix_small <- "./"
+path_prefix_real <- "/Users/sebastiansaueruser/Google Drive/research/Covid19/covid-icu-old"
+path_prefix_small <- here::here()
 
 if (dataset == "small") path_prefix <- path_prefix_small
 if (dataset == "real") path_prefix <- path_prefix_real
 
-data_raw_path <- paste0(path_prefix, "data/raw/CovidDA_CA_randomisierte Version_bearbeitet230322.xlsx")
 
-data_processed_path <- paste0(path_prefix, "data/processed/data-prepared.csv")
+if (dataset == "small") data_raw_path <- paste0(path_prefix, "/data/raw/d-raw-small.xlsx")
+if (dataset == "real") data_raw_path <- paste0(path_prefix, "/data/raw/d-raw.xlsx")
+
+data_processed_path <- paste0(path_prefix, "/data/processed/data-prepared.csv")
 
 
 # Output Paths -------------------------------------------------------------------
@@ -41,13 +43,14 @@ rmdfile04 <- "04-modelling"
 
 
 
-xgb01_outputfile <- paste0(path_prefix, "models/xgb01.rds")
-logistic01_outputfile <- paste0(path_prefix, "models/logistic01.rds")
-rf01_outputfile <- paste0(path_prefix, "models/rf01.rds")
-final_rf_fit_file <-  paste0(path_prefix, "models/rf_final_01.rds")
+xgb01_outputfile <- paste0(path_prefix, "/models/xgb01.rds")
+logistic01_outputfile <- paste0(path_prefix, "/models/logistic01.rds")
+rf01_outputfile <- paste0(path_prefix, "/models/rf01.rds")
+final_rf_fit_file <-  paste0(path_prefix, "/models/rf_final_01.rds")
 
 
-figs_prefix_path <- paste0(path_prefix, "figs/")
+figs_prefix_path <- paste0(path_prefix, "/figs/")
+path_prefix_docs <- paste0(path_prefix, "/docs/")
 
 
 # Particular variables ----------------------------------------------------

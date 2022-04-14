@@ -18,9 +18,9 @@ prepare_data <- function(data_raw_path, dv = NULL, id = NULL){
   flog.info("STARTING data preparating")
   flog.info("Loaded libs")
 
-
-
+  stopifnot(file.exists(data_raw_path))
   df <- import(data_raw_path)
+
 
   df2 <- clean_names(df)
   flog.info("Cleaned names")
